@@ -6,13 +6,6 @@
     <title>Geo-IP Guesser - Log Analyzer Demo</title>
     <!-- Load Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Load Leaflet for map functionality -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-        crossorigin=""/>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20n6a95c5IeM+6J9s7R4y25wD1e582b0n/V0lGzI1V4="
-        crossorigin=""></script>
     
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
@@ -25,12 +18,6 @@
         }
         #messageBox {
             min-height: 48px;
-        }
-        /* Mandatory for Leaflet map to display */
-        #mapContainer {
-            height: 400px; 
-            width: 100%;
-            border-radius: 0.5rem;
         }
     </style>
 </head>
@@ -81,9 +68,6 @@
             <div id="messageBox" class="p-3 rounded-lg text-center font-semibold transition duration-300 bg-white">
                 Waiting for your first guess...
             </div>
-
-            <!-- Map Container -->
-            <div id="mapContainer" class="hidden"></div>
             
             <button id="resetButton" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition duration-150 hidden">
                 New IP Address
@@ -98,9 +82,6 @@
         let isGameOver = false;
         let guessCount = 0; 
         let clueLevel = 0; 
-        let map;
-        let guessedCityMarkers = L.layerGroup();
-        let actualCityMarker;
 
         // Constants
         const EARTH_RADIUS_KM = 6371;
@@ -111,82 +92,6 @@
             '104.16.0.0',   // Edge Network
             '142.250.72.36' // Google
         ];
-
-        // --- Map Functions ---
-
-        /**
-         * Initializes the Leaflet map in the mapContainer.
-         */
-        function initializeMap() {
-            if (map) {
-                map.remove();
-            }
-            map = L.map('mapContainer', {
-                worldCopyJump: true // Keeps markers visible even when crossing international date line
-            }).setView([0, 0], 2); // Start centered globally
-            
-            // Add a tile layer (OpenStreetMap)
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                maxZoom: 19,
-                attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
-            }).addTo(map);
-
-            guessedCityMarkers.addTo(map);
-        }
-
-        /**
-         * Clears all markers and prepares the map for a new round.
-         */
-        function resetMap() {
-            guessedCityMarkers.clearLayers();
-            if (actualCityMarker) {
-                map.removeLayer(actualCityMarker);
-                actualCityMarker = null;
-            }
-            map.setView([0, 0], 2);
-        }
-
-        /**
-         * Displays markers for the guessed and actual locations.
-         * @param {object} guessCoords - {lat, lon} of the user's guess.
-         * @param {boolean} isWin - True if the guess was correct.
-         */
-        function displayMarkers(guessCoords, isWin) {
-            // 1. Add Guess Marker (Red Pin)
-            const guessMarker = L.marker([guessCoords.lat, guessCoords.lon], {
-                icon: L.divIcon({
-                    className: 'guess-marker-icon',
-                    html: '<span class="text-3xl" title="Your Guess">📍</span>', // Red Pin Emoji
-                    iconSize: [32, 32],
-                }),
-                title: 'Your Guess'
-            }).bindPopup(`Guessed: ${document.getElementById('cityGuessInput').value}`);
-            guessedCityMarkers.addLayer(guessMarker);
-
-            // 2. Add Actual Location Marker (Only on Win)
-            if (isWin) {
-                const actualCoords = [targetLocation.lat, targetLocation.lon];
-                actualCityMarker = L.marker(actualCoords, {
-                    icon: L.divIcon({
-                        className: 'actual-marker-icon',
-                        html: '<span class="text-3xl" title="Actual Location">✅</span>', // Green Check Emoji
-                        iconSize: [32, 32],
-                    }),
-                    title: 'Actual Location'
-                }).bindPopup(`Actual: ${targetLocation.city}`);
-                actualCityMarker.addTo(map);
-            }
-
-            // 3. Adjust Map View to fit all markers
-            const markers = [];
-            guessedCityMarkers.eachLayer(layer => markers.push(layer));
-            if (actualCityMarker) markers.push(actualCityMarker);
-
-            if (markers.length > 0) {
-                const group = new L.featureGroup(markers);
-                map.fitBounds(group.getBounds(), { padding: [50, 50] });
-            }
-        }
 
         // --- Utility Functions ---
 
@@ -206,9 +111,11 @@
 
         /**
          * Geocodes a city name using a free, rough service (Nominatim). 
+         * This provides coordinates for the user's guessed city to calculate distance.
          */
         async function geocodeCity(city) {
             try {
+                // Using OpenStreetMap's Nominatim service for geocoding the guessed city name
                 const url = `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(city)}&format=json&limit=1`;
                 const response = await fetch(url);
                 const data = await response.json();
@@ -245,7 +152,7 @@
         }
         
         /**
-         * Generates the clue string based on the current clue level.
+         * Generates the clue string based on the current clue level (revealed letters).
          */
         function provideClue() {
             const city = targetLocation.city;
@@ -280,14 +187,13 @@
             document.getElementById('cityGuessInput').disabled = false;
             displayMessage('Fetching new IP location...', 'bg-gray-200 text-gray-800');
             document.getElementById('targetIpDisplay').textContent = '...';
-            resetMap(); // Clear map markers
 
             let info = null;
             let ip = null;
             let maxAttempts = TARGET_IP_LIST.length * 3; 
             let attempt = 0;
 
-            // Loop until a valid IP with non-empty city data is found
+            // Loop until a valid IP with non-empty city and location data is found
             while (!info || !info.loc || !info.city || info.city.trim() === '') {
                 attempt++;
                 if (attempt > maxAttempts) {
@@ -336,9 +242,6 @@
                 document.getElementById('cityGuessInput').disabled = true;
                 document.getElementById('resetButton').classList.remove('hidden');
                 
-                // Use actual location for marker on win
-                displayMarkers({lat: targetLocation.lat, lon: targetLocation.lon}, true); 
-                
                 displayMessage(`🎉 CORRECT! The location is ${targetLocation.city}.`, 'bg-green-200 text-green-800');
                 return;
             }
@@ -349,12 +252,11 @@
 
             // Provide Clue (Distance)
             displayMessage('Calculating distance and checking for clues...', 'bg-gray-200 text-gray-800');
+            
+            // Geocode the user's guess to calculate distance
             const guessedCoords = await geocodeCity(guessText);
 
             if (guessedCoords) {
-                // Display guess marker on the map
-                displayMarkers(guessedCoords, false); 
-
                 const distance = calculateDistance(
                     targetLocation.lat, targetLocation.lon, 
                     guessedCoords.lat, guessedCoords.lon
@@ -364,8 +266,8 @@
                 
                 // Check for Clue Trigger (every 3 wrong guesses)
                 if (guessCount > 0 && guessCount % 3 === 0) {
-                    // Only increase clue level if there are still letters to reveal
-                    if (clueLevel < targetLocation.city.replace(/ /g, '').length) { // Check length without spaces
+                    // Check city length without spaces
+                    if (clueLevel < targetLocation.city.replace(/ /g, '').length) { 
                          clueLevel++;
                          clueMessage = `<br><strong class="text-blue-600">Clue UNLOCKED!</strong> You've revealed the next letter.`;
                     }
@@ -404,11 +306,9 @@
                 apiKey = key;
                 document.getElementById('apiKeySection').classList.add('hidden');
                 document.getElementById('gameSection').classList.remove('hidden');
-                document.getElementById('mapContainer').classList.remove('hidden'); // Show the map
                 document.getElementById('keyStatus').textContent = 'Key saved! Ready to play.';
                 
-                // Initialize map once the section is visible
-                initializeMap(); 
+                // Start the game immediately
                 startNewRound();
             } else {
                 document.getElementById('keyStatus').className = 'text-sm text-red-500';
