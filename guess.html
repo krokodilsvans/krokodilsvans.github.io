@@ -85,15 +85,24 @@
 
         // Constants
         const EARTH_RADIUS_KM = 6371;
-        // Example IP addresses for demonstration
-        const TARGET_IP_LIST = [
-            '1.1.1.1',      // Cloudflare, generally has a city
-            '8.8.8.8',      // Google, generally has a city
-            '104.16.0.0',   // Edge Network
-            '142.250.72.36' // Google
-        ];
 
         // --- Utility Functions ---
+        
+        /**
+         * Generates a random public IPv4 address.
+         * Note: This is simplified and relies on the subsequent API call to filter 
+         * out unrouteable, private, or non-geocodable IPs.
+         */
+        function generateRandomPublicIp() {
+            // Generates 4 octets between 1 and 255. 
+            // The first octet is restricted to avoid 0 (reserved) and 255 (broadcast)
+            const o1 = Math.floor(Math.random() * 254) + 1; 
+            const o2 = Math.floor(Math.random() * 256);
+            const o3 = Math.floor(Math.random() * 256);
+            const o4 = Math.floor(Math.random() * 256);
+            return `${o1}.${o2}.${o3}.${o4}`;
+        }
+
 
         /**
          * Calculates the distance between two geographical points using the Haversine formula (in km).
@@ -185,25 +194,24 @@
             document.getElementById('resetButton').classList.add('hidden');
             document.getElementById('cityGuessInput').value = '';
             document.getElementById('cityGuessInput').disabled = false;
-            displayMessage('Fetching new IP location...', 'bg-gray-200 text-gray-800');
+            displayMessage('Fetching a random public IP location...', 'bg-gray-200 text-gray-800');
             document.getElementById('targetIpDisplay').textContent = '...';
 
             let info = null;
             let ip = null;
-            let maxAttempts = TARGET_IP_LIST.length * 3; 
+            let maxAttempts = 10; // Cap attempts to prevent excessive API calls
             let attempt = 0;
 
             // Loop until a valid IP with non-empty city and location data is found
             while (!info || !info.loc || !info.city || info.city.trim() === '') {
                 attempt++;
                 if (attempt > maxAttempts) {
-                    displayMessage('Failed to find a suitable IP with city data after multiple attempts.', 'bg-red-200 text-red-800');
+                    displayMessage('Failed to find a geolocatable public IP after multiple attempts. Try resetting or checking your API key.', 'bg-red-200 text-red-800');
                     return;
                 }
                 
-                // 1. Get a random IP
-                const randomIndex = Math.floor(Math.random() * TARGET_IP_LIST.length);
-                ip = TARGET_IP_LIST[randomIndex];
+                // 1. Get a truly random public IP
+                ip = generateRandomPublicIp();
                 
                 // 2. Fetch its location
                 info = await fetchIpInfo(ip);
