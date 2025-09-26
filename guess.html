@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geo-IP Guesser - Log Analyzer Demo</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .card {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+        }
+        #messageBox {
+            min-height: 48px;
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+
+    <div class="max-w-xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-extrabold text-gray-900 mb-2">🌐 Geo-IP Guesser</h1>
+            <p class="text-gray-600">A demo showcasing the IP enrichment feature of the Log Analyzer tool.</p>
+        </header>
+
+        <!-- API Key Input Card -->
+        <div id="apiKeySection" class="card bg-white p-6 rounded-xl space-y-4 mb-8">
+            <h2 class="text-xl font-semibold text-blue-600">1. Enter Your ipinfo.io API Key</h2>
+            <div class="flex flex-col sm:flex-row gap-2">
+                <input type="text" id="apiKeyInput" placeholder="YOUR_IPINFO_API_TOKEN" class="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                <button id="saveApiKeyButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
+                    Save Key & Start
+                </button>
+            </div>
+            <p id="keyStatus" class="text-sm text-gray-500">Your key will only be stored locally in this session.</p>
+        </div>
+
+        <!-- Game Area Card -->
+        <div id="gameSection" class="card bg-white p-6 rounded-xl space-y-6 hidden">
+            <h2 class="text-xl font-semibold text-green-600">2. Guess the Location!</h2>
+            
+            <div class="p-4 bg-gray-100 rounded-lg">
+                <p class="text-sm text-gray-500 font-medium">Random IP Address:</p>
+                <p id="targetIpDisplay" class="text-2xl font-mono font-bold text-gray-800">...</p>
+            </div>
+
+            <div class="flex flex-col gap-4">
+                <input type="text" id="cityGuessInput" placeholder="Enter your best guess for the city name" class="p-3 border-2 border-yellow-300 rounded-lg focus:ring-yellow-500 focus:border-yellow-500 uppercase">
+                <button id="guessButton" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3 px-4 rounded-lg transition duration-150 shadow-md hover:shadow-lg">
+                    Submit Guess
+                </button>
+            </div>
+            
+            <!-- Message Box for Feedback -->
+            <div id="messageBox" class="p-3 rounded-lg text-center font-semibold transition duration-300 bg-white">
+                Waiting for your first guess...
+            </div>
+            
+            <button id="resetButton" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition duration-150 hidden">
+                New IP Address
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration & State ---
+        let apiKey = '';
+        let targetLocation = { ip: '', city: '', lat: 0, lon: 0 };
+        let isGameOver = false;
+
+        // Constants
+        const EARTH_RADIUS_KM = 6371;
+        const TARGET_IP_LIST = [
+            '203.0.113.45', // Example 1
+            '1.1.1.1', // Example 2 (Cloudflare)
+            '8.8.8.8', // Example 3 (Google)
+            '66.1.1.1', // Example 4 (CDN)
+            '40.77.167.99' // Example 5 (Microsoft)
+        ];
+
+        // --- Utility Functions ---
+
+        /**
+         * Calculates the distance between two geographical points using the Haversine formula (in km).
+         * @param {number} lat1 - Latitude of point 1
+         * @param {number} lon1 - Longitude of point 1
+         * @param {number} lat2 - Latitude of point 2
+         * @param {number} lon2 - Longitude of point 2
+         * @returns {number} Distance in kilometers
+         */
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const toRad = (x) => x * Math.PI / 180;
+
+            const dLat = toRad(lat2 - lat1);
+            const dLon = toRad(lon2 - lon1);
+
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            
+            return EARTH_RADIUS_KM * c; // Distance in km
+        }
+
+        /**
+         * Geocodes a city name using a free, rough service (Nominatim). 
+         * NOTE: This is less precise than a dedicated API but provides necessary coordinates for the game.
+         * @param {string} city - The city name to search for.
+         * @returns {Promise<{lat: number, lon: number}>} Coordinates or null.
+         */
+        async function geocodeCity(city) {
+            try {
+                const url = `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(city)}&format=json&limit=1`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data && data.length > 0) {
+                    return {
+                        lat: parseFloat(data[0].lat),
+                        lon: parseFloat(data[0].lon)
+                    };
+                }
+            } catch (error) {
+                console.error("Geocoding failed:", error);
+            }
+            return null;
+        }
+
+        // --- Core Game Functions ---
+
+        /**
+         * Fetches geolocation data for a given IP using the user's API key.
+         */
+        async function fetchIpInfo(ip) {
+            const apiUrl = `https://ipinfo.io/${ip}/json?token=${apiKey}`;
+            try {
+                const response = await fetch(apiUrl);
+                if (!response.ok) {
+                    throw new Error(`IPinfo API Error: ${response.status} ${response.statusText}`);
+                }
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                displayMessage(`Error fetching IP data: ${error.message}`, 'bg-red-200 text-red-800');
+                console.error("Fetch IP Info Error:", error);
+                return null;
+            }
+        }
+
+        /**
+         * Starts a new game round.
+         */
+        async function startNewRound() {
+            isGameOver = false;
+            document.getElementById('guessButton').disabled = false;
+            document.getElementById('resetButton').classList.add('hidden');
+            document.getElementById('cityGuessInput').value = '';
+            document.getElementById('cityGuessInput').disabled = false;
+            displayMessage('Fetching new IP location...', 'bg-gray-200 text-gray-800');
+            document.getElementById('targetIpDisplay').textContent = '...';
+
+            // 1. Get a random IP
+            const randomIndex = Math.floor(Math.random() * TARGET_IP_LIST.length);
+            const ip = TARGET_IP_LIST[randomIndex];
+            
+            // 2. Fetch its location
+            const info = await fetchIpInfo(ip);
+
+            if (info && info.loc) {
+                const [lat, lon] = info.loc.split(',').map(Number);
+                
+                targetLocation = {
+                    ip: ip,
+                    city: info.city.toUpperCase().trim(),
+                    lat: lat,
+                    lon: lon
+                };
+
+                document.getElementById('targetIpDisplay').textContent = ip;
+                displayMessage('IP fetched! Enter your guess for the city name.', 'bg-yellow-100 text-yellow-800');
+            } else {
+                displayMessage('Could not get a valid location for the IP. Try a different key or IP.', 'bg-red-200 text-red-800');
+            }
+        }
+
+        /**
+         * Handles the user's guess submission.
+         */
+        async function handleGuess() {
+            if (isGameOver) return;
+
+            const guessText = document.getElementById('cityGuessInput').value.toUpperCase().trim();
+            if (!guessText) {
+                displayMessage('Please enter a city name to guess.', 'bg-red-100 text-red-800');
+                return;
+            }
+
+            // Check for Win Condition
+            if (guessText === targetLocation.city) {
+                isGameOver = true;
+                document.getElementById('guessButton').disabled = true;
+                document.getElementById('cityGuessInput').disabled = true;
+                document.getElementById('resetButton').classList.remove('hidden');
+                displayMessage(`🎉 CORRECT! The location is ${targetLocation.city}.`, 'bg-green-200 text-green-800');
+                return;
+            }
+
+            // Provide Clue (Distance)
+            displayMessage('Calculating distance...', 'bg-gray-200 text-gray-800');
+            const guessedCoords = await geocodeCity(guessText);
+
+            if (guessedCoords) {
+                const distance = calculateDistance(
+                    targetLocation.lat, targetLocation.lon, 
+                    guessedCoords.lat, guessedCoords.lon
+                );
+
+                displayMessage(
+                    `❌ Wrong guess! Your city is ${Math.round(distance).toLocaleString()} km away from the actual location. Try again!`,
+                    'bg-red-100 text-red-800'
+                );
+
+            } else {
+                displayMessage(`Could not find coordinates for "${guessText}". Please check the spelling.`, 'bg-red-100 text-red-800');
+            }
+        }
+
+        /**
+         * Displays status/feedback messages.
+         */
+        function displayMessage(text, className) {
+            const msgBox = document.getElementById('messageBox');
+            msgBox.className = `p-3 rounded-lg text-center font-semibold transition duration-300 ${className}`;
+            msgBox.textContent = text;
+        }
+
+
+        // --- Event Handlers & Initialization ---
+
+        function handleSaveApiKey() {
+            const input = document.getElementById('apiKeyInput');
+            const key = input.value.trim();
+            
+            if (key.length > 10) { // Basic check for key length
+                apiKey = key;
+                document.getElementById('apiKeySection').classList.add('hidden');
+                document.getElementById('gameSection').classList.remove('hidden');
+                document.getElementById('keyStatus').textContent = 'Key saved! Ready to play.';
+                startNewRound();
+            } else {
+                document.getElementById('keyStatus').className = 'text-sm text-red-500';
+                document.getElementById('keyStatus').textContent = 'Please enter a valid-looking API token.';
+            }
+        }
+        
+        // Setup Event Listeners
+        window.onload = function() {
+            document.getElementById('saveApiKeyButton').addEventListener('click', handleSaveApiKey);
+            document.getElementById('guessButton').addEventListener('click', handleGuess);
+            document.getElementById('resetButton').addEventListener('click', startNewRound);
+
+            document.getElementById('cityGuessInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    handleGuess();
+                }
+            });
+        };
+    </script>
+
+</body>
+</html>
